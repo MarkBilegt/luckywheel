@@ -4,40 +4,56 @@ A standalone spin-to-win site in Mongolian. Visitors enter their **name and phon
 and win a discount, free delivery, a cash prize, or nothing. The owner gets a call list in the admin
 to phone people back later.
 
-- **Frontend:** React + Vite (`src/`)
-- **Backend:** Node.js + Express (`server/`), SQLite database (Node's built-in `node:sqlite`, one file in `data/`)
-- Needs **Node.js 24 or newer** (the server runs TypeScript directly, no build step).
+Runs entirely on **Cloudflare**:
+
+- **Site:** React + Vite (`src/`), served by Workers Static Assets from `dist/`
+- **API:** a Cloudflare Worker using Hono (`worker/`), handling `/api/*`
+- **Database:** Cloudflare D1, which is SQLite (`migrations/`)
 
 ## Run it locally
 
 ```bash
 npm install
-cp .env.example .env      # then set ADMIN_PASSWORD (10+ characters) and SESSION_SECRET
-npm run dev               # API on :3001 + site on http://localhost:5173
+cp .dev.vars.example .dev.vars   # set ADMIN_PASSWORD (10+ characters) and SESSION_SECRET
+npm run dev                      # Worker + local D1 on :8787, site on http://localhost:5173
 ```
 
 - `/` is the wheel visitors see.
-- `/#/admin` is the admin (password from `.env`). Nothing on the public page links to it.
+- `/#/admin` is the admin (password from `.dev.vars`). Nothing on the public page links to it.
+- The local database lives in `.wrangler/` and has nothing to do with the live one.
 
-## Deploy
+## Deploy to Cloudflare (first time)
 
 ```bash
-npm install
-npm run build             # type-checks and builds the site into dist/
-npm start                 # one process serves the API and the site on PORT
+npx wrangler login                          # opens the browser to sign in to Cloudflare
+npx wrangler d1 create luckywheel           # prints a database_id: paste it into wrangler.jsonc
+npx wrangler secret put ADMIN_PASSWORD      # type the admin password (10+ characters)
+npx wrangler secret put SESSION_SECRET      # paste a long random string
+npm run deploy                              # build, create the tables, upload
 ```
 
-In `.env` on the server set `NODE_ENV=production`, a strong `ADMIN_PASSWORD`, a random `SESSION_SECRET`,
-and `TRUST_PROXY=1` if it runs behind nginx or a load balancer. Serve it over **HTTPS** (admin cookies are
-secure-only in production). **Back up `data/luckywheel.db`**: it holds all phone numbers, codes and notes.
+`npm run deploy` prints the site's address (`https://luckywheel.<your-subdomain>.workers.dev`).
+To use your own domain: Cloudflare dashboard → Workers & Pages → luckywheel → Settings → Domains & Routes.
+
+After that, `npm run deploy` publishes any change. Or connect the GitHub repo in the dashboard
+(Workers & Pages → luckywheel → Settings → Builds) with build command `npm run build` and deploy
+command `npx wrangler d1 migrations apply luckywheel --remote && npx wrangler deploy`, so every push to
+`main` goes live.
+
+**Backups:** `npx wrangler d1 export luckywheel --remote --output backup.sql` saves all phone numbers,
+codes and notes. D1 also keeps 30 days of point-in-time history (`wrangler d1 time-travel`).
 
 ## How a spin works
 
 1. The page loads the wheel from `GET /api/wheel` (names and colors only, never the odds).
 2. The visitor submits name + phone. `POST /api/spin` checks the number (8-digit Mongolian, `+976` optional),
-   the per-number limit, the wait time, the per-IP daily limit and a 10-per-minute burst limit, then picks
-   the prize **on the server** and saves it, all in one transaction (double-clicks can't win twice).
-3. The browser only animates the wheel to the slice the server chose and shows the code.
+   the per-number limit, the wait time, the per-IP daily limit, and a 10-per-minute burst limit, then picks
+   the prize **on the server** and saves it.
+3. Each spin takes a numbered "slot" for that phone, protected by a `UNIQUE (phone, slot)` rule, so a
+   double-click or two tabs can't win twice.
+4. The browser only animates the wheel to the slice the server chose and shows the code.
+
+Daily resets use Mongolian time (UTC+8; `UTC_OFFSET_MINUTES` in `wrangler.jsonc`), because Workers run on UTC.
 
 ## Admin
 
@@ -54,14 +70,14 @@ secure-only in production). **Back up `data/luckywheel.db`**: it holds all phone
 | --- | --- | --- |
 | GET | `/api/wheel` | public wheel (no odds) |
 | POST | `/api/spin` | `{ name, phone, consent }` → `{ segments, segmentIndex, record }` |
-| GET | `/api/admin/session` · POST `/login` · POST `/logout` | admin session (HttpOnly cookie) |
-| GET / PUT | `/api/admin/config` · POST `/api/admin/config/reset` | settings, prizes, design |
+| GET / POST / POST | `/api/admin/session` · `/login` · `/logout` | admin session (HttpOnly, Secure, SameSite=Strict cookie) |
+| GET / PUT · POST | `/api/admin/config` · `/api/admin/config/reset` | settings, prizes, design |
 | GET / DELETE | `/api/admin/spins` | all spins / delete everything |
 | GET · PUT | `/api/admin/contacts` · `/api/admin/contacts/:phone` | call-back status and notes |
 | GET · POST | `/api/admin/coupons/:code` · `/api/admin/coupons/:code/redeem` | check / mark a code used |
 
 ## Notes
 
-- Phone numbers are personal data. The consent checkbox text says people agree to be called; keep it on.
-- Codes are only shown on screen (no SMS is sent). An SMS gateway could be added in `server/index.ts` after a win.
-- SQLite fits a single server comfortably. For several servers, move to PostgreSQL (all queries live in `server/db.ts`).
+- Phone numbers are personal data. The consent checkbox says people agree to be called; keep it on.
+- Codes are only shown on screen (no SMS is sent). An SMS gateway could be called from `worker/index.ts` after a win.
+- Free plan limits (100,000 requests/day, 5 GB D1) are far beyond what this site needs.

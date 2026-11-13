@@ -31,24 +31,48 @@ export function validateInput(input: SpinInput, settings: Settings, gdprChecked:
   return null;
 }
 
-/** Start of the current "spin day" when daily reset is on, e.g. today 00:00 (or yesterday if not reached yet). */
-export function lastResetTime(resetTime: string, now = Date.now()): number {
+/** Mongolia is UTC+8 all year. Servers (Cloudflare Workers) run on UTC, so local times are computed with this. */
+export const MONGOLIA_UTC_OFFSET_MIN = 480;
+
+/**
+ * Start of the current "spin day" for a daily reset at resetTime ("HH:MM" local),
+ * e.g. today 00:00, or yesterday 00:00 if today's reset hasn't happened yet. Returns UTC ms.
+ */
+export function lastResetTime(resetTime: string, now = Date.now(), utcOffsetMin = MONGOLIA_UTC_OFFSET_MIN): number {
   const [h, m] = resetTime.split(':').map((n) => parseInt(n, 10) || 0);
-  const d = new Date(now);
-  d.setHours(h, m, 0, 0);
-  if (d.getTime() > now) d.setDate(d.getDate() - 1);
-  return d.getTime();
+  const shift = utcOffsetMin * 60_000;
+  const d = new Date(now + shift); // read its UTC fields as local wall-clock time
+  d.setUTCHours(h, m, 0, 0);
+  if (d.getTime() > now + shift) d.setUTCDate(d.getUTCDate() - 1);
+  return d.getTime() - shift;
+}
+
+/**
+ * Which of a number's allowed spins the next one would use, e.g. "all#0" or "<reset ms>#2".
+ * Stored with a UNIQUE (phone, slot) rule, so two simultaneous requests can't both get the same spin.
+ */
+export function nextSpinSlot(phoneSpins: number[], settings: Settings, now = Date.now(), utcOffsetMin = MONGOLIA_UTC_OFFSET_MIN): string {
+  if (settings.spinsPerPhone <= 0) return `free#${crypto.randomUUID()}`; // unlimited: nothing to protect
+  if (!settings.resetSpinsDaily) return `all#${phoneSpins.length}`;
+  const start = lastResetTime(settings.resetTime, now, utcOffsetMin);
+  return `${start}#${phoneSpins.filter((t) => t >= start).length}`;
 }
 
 /**
  * Why this visitor can't spin right now, or null if they can.
  * `phoneSpins` are the timestamps (ms) of this number's earlier spins; `ipSpinsToday` counts spins from their IP in the last 24h.
  */
-export function eligibilityError(phoneSpins: number[], ipSpinsToday: number, settings: Settings, now = Date.now()): string | null {
+export function eligibilityError(
+  phoneSpins: number[],
+  ipSpinsToday: number,
+  settings: Settings,
+  now = Date.now(),
+  utcOffsetMin = MONGOLIA_UTC_OFFSET_MIN,
+): string | null {
   const { spinsPerPhone, spinsPerIpPerDay, cooldownHours, resetSpinsDaily, resetTime } = settings;
 
   // Spin-count limit first: if they can never spin again, a "come back in X hours" message would mislead.
-  const counted = resetSpinsDaily ? phoneSpins.filter((t) => t >= lastResetTime(resetTime, now)) : phoneSpins;
+  const counted = resetSpinsDaily ? phoneSpins.filter((t) => t >= lastResetTime(resetTime, now, utcOffsetMin)) : phoneSpins;
   if (spinsPerPhone > 0 && counted.length >= spinsPerPhone) {
     if (resetSpinsDaily) return 'Өнөөдрийн эргүүлэх эрхээ ашигласан байна. Маргааш дахин ирээрэй!';
     return spinsPerPhone === 1

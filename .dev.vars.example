@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local development (wrangler dev). In production set these with:
+#   npx wrangler secret put ADMIN_PASSWORD
+#   npx wrangler secret put SESSION_SECRET
+ADMIN_PASSWORD=change-me-at-least-10-chars
+SESSION_SECRET=generate-with-node-e-crypto-randomBytes-32-hex

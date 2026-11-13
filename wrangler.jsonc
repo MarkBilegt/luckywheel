@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "luckywheel",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+
+  // The React site (built into dist/). Only /api/* goes to the Worker; every other
+  // unknown path serves index.html so the app's #/admin routing works.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Create with: npx wrangler d1 create luckywheel, then paste the id it prints here.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "luckywheel",
+      "database_id": "6f9d9058-0772-411a-aa2e-b403cd8da49d",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ADMIN_PASSWORD and SESSION_SECRET are secrets: set them with `npx wrangler secret put <NAME>`
+  // (locally they come from .dev.vars).
+  "vars": {
+    "UTC_OFFSET_MINUTES": "480"
+  }
+}
