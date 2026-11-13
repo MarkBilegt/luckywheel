@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
-import { clearSpins, downloadText, inRange, spinsToCSV, subscribersFrom, subscribersToCSV } from '../../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import * as api from '../../lib/api';
+import { formatPhone } from '../../lib/rules';
 import { formatDate, formatDateTime } from '../../lib/wheel';
-import type { SpinRecord } from '../../types';
+import type { Contact, SpinRecord } from '../../types';
 
 export function DateRange({ from, to, onChange }: { from: string; to: string; onChange: (from: string, to: string) => void }) {
   const preset = (days: number | null) => {
@@ -26,35 +27,79 @@ export function DateRange({ from, to, onChange }: { from: string; to: string; on
   );
 }
 
+type CallFilter = 'all' | 'todo' | 'done';
+
+/** Everyone who spun, as a call list: tap to call, tick when contacted, keep a short note. */
 export function SubscribersTab({ spins, onChanged }: { spins: SpinRecord[]; onChanged: () => void }) {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [view, setView] = useState<'subscribers' | 'spins'>('subscribers');
+  const [view, setView] = useState<'people' | 'spins'>('people');
+  const [callFilter, setCallFilter] = useState<CallFilter>('all');
   const [query, setQuery] = useState('');
+  const [contacts, setContacts] = useState<Map<string, Contact>>(new Map());
+  const [error, setError] = useState<string | null>(null);
 
-  const ranged = useMemo(() => spins.filter((s) => inRange(s.at, from, to)), [spins, from, to]);
-  const subs = useMemo(() => subscribersFrom(ranged), [ranged]);
-  const q = query.trim().toLowerCase();
-  const shownSubs = q ? subs.filter((s) => `${s.email} ${s.name} ${s.phone}`.toLowerCase().includes(q)) : subs;
-  const shownSpins = q ? ranged.filter((s) => `${s.email} ${s.name} ${s.phone} ${s.code ?? ''}`.toLowerCase().includes(q)) : ranged;
-  const stamp = `${from || 'start'}_to_${to || 'today'}`;
+  useEffect(() => {
+    api.getContacts().then(
+      (list) => setContacts(new Map(list.map((c) => [c.phone, c]))),
+      (err) => setError(err.message),
+    );
+  }, [spins]);
+
+  async function updateContact(phone: string, patch: Partial<Pick<Contact, 'contacted' | 'note'>>) {
+    const before = contacts.get(phone) ?? { phone, contacted: false, note: '', updatedAt: null };
+    const next = { ...before, ...patch };
+    setContacts((m) => new Map(m).set(phone, next)); // show it straight away
+    try {
+      const saved = await api.saveContact(phone, next.contacted, next.note);
+      setContacts((m) => new Map(m).set(phone, saved));
+      setError(null);
+    } catch (err) {
+      setContacts((m) => new Map(m).set(phone, before));
+      setError(err instanceof Error ? err.message : 'Хадгалж чадсангүй.');
+    }
+  }
+
+  const ranged = useMemo(() => spins.filter((s) => api.inRange(s.at, from, to)), [spins, from, to]);
+  const people = useMemo(() => api.subscribersFrom(ranged), [ranged]);
+
+  const q = query.trim().toLowerCase().replace(/[\s-]/g, '');
+  const matches = (name: string, phone: string, extra = '') =>
+    !q || `${name.toLowerCase()} ${phone} ${extra.toLowerCase()}`.replace(/[\s-]/g, '').includes(q);
+
+  const shownPeople = people.filter((p) => {
+    const done = !!contacts.get(p.phone)?.contacted;
+    if (callFilter === 'todo' && done) return false;
+    if (callFilter === 'done' && !done) return false;
+    return matches(p.name, p.phone, contacts.get(p.phone)?.note ?? '');
+  });
+  const shownSpins = ranged.filter((s) => matches(s.name, s.phone, s.code ?? ''));
+  const todoCount = people.filter((p) => !contacts.get(p.phone)?.contacted).length;
+  const stamp = `${from || 'ehlel'}_${to || 'odoo'}`;
 
   return (
     <div className="lw-log">
       <DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
       <div className="lw-log-actions">
         <div className="lw-seg-switch" role="group" aria-label="Харагдац">
-          <button className={view === 'subscribers' ? 'active' : ''} onClick={() => setView('subscribers')}>Бүртгүүлэгчид ({subs.length})</button>
+          <button className={view === 'people' ? 'active' : ''} onClick={() => setView('people')}>Хүмүүс ({people.length})</button>
           <button className={view === 'spins' ? 'active' : ''} onClick={() => setView('spins')}>Бүх эргүүлэлт ({ranged.length})</button>
         </div>
-        <input className="lw-search" type="search" placeholder="Имэйл, нэр, утас, кодоор хайх" value={query} onChange={(e) => setQuery(e.target.value)} />
+        {view === 'people' && (
+          <select className="lw-call-filter" value={callFilter} onChange={(e) => setCallFilter(e.target.value as CallFilter)} aria-label="Холбогдсон эсэх">
+            <option value="all">Бүгд</option>
+            <option value="todo">Холбогдоогүй ({todoCount})</option>
+            <option value="done">Холбогдсон ({people.length - todoCount})</option>
+          </select>
+        )}
+        <input className="lw-search" type="search" placeholder="Нэр, утас, код, тэмдэглэлээр хайх" value={query} onChange={(e) => setQuery(e.target.value)} />
         <button
           className="btn ghost"
           disabled={!ranged.length}
           onClick={() =>
-            view === 'subscribers'
-              ? downloadText(`burtguulegchid_${stamp}.csv`, subscribersToCSV(subs))
-              : downloadText(`ergeltuud_${stamp}.csv`, spinsToCSV(ranged))
+            view === 'people'
+              ? api.downloadText(`utasnii_jagsaalt_${stamp}.csv`, api.subscribersToCSV(shownPeople, contacts))
+              : api.downloadText(`ergeltuud_${stamp}.csv`, api.spinsToCSV(shownSpins))
           }
         >
           CSV татах
@@ -63,9 +108,9 @@ export function SubscribersTab({ spins, onChanged }: { spins: SpinRecord[]; onCh
           className="btn ghost danger"
           disabled={!spins.length}
           onClick={async () => {
-            if (!confirm('Бүх бүртгүүлэгч, эргүүлэлтийг серверээс устгах уу? Имэйл бүрийн эргүүлэх эрх мөн шинэчлэгдэнэ. Буцаах боломжгүй.')) return;
+            if (!confirm('Бүх хүн, эргүүлэлт, тэмдэглэлийг серверээс устгах уу? Дугаар бүрийн эргүүлэх эрх мөн шинэчлэгдэнэ. Буцаах боломжгүй.')) return;
             try {
-              await clearSpins();
+              await api.clearSpins();
             } catch (err) {
               alert(err instanceof Error ? err.message : 'Алдаа гарлаа.');
             }
@@ -76,39 +121,55 @@ export function SubscribersTab({ spins, onChanged }: { spins: SpinRecord[]; onCh
         </button>
       </div>
 
+      {error && <p className="lw-login-error" role="alert">{error}</p>}
+
       {ranged.length === 0 ? (
-        <p className="muted empty">{spins.length ? 'Энэ хугацаанд эргүүлэлт алга.' : 'Одоогоор бүртгүүлэгч алга.'}</p>
+        <p className="muted empty">{spins.length ? 'Энэ хугацаанд эргүүлэлт алга.' : 'Одоогоор хэн ч эргүүлээгүй байна.'}</p>
       ) : (
         <div className="lw-seg-table-wrap">
-          {view === 'subscribers' ? (
-            <table className="lw-seg-table">
+          {view === 'people' ? (
+            <table className="lw-seg-table lw-call-table">
               <thead>
-                <tr><th>Имэйл</th><th>Нэр</th><th>Утас</th><th>Бүртгүүлсэн</th><th>Эргүүлэлт</th><th>Сүүлийн үр дүн</th><th>Сүүлийн код</th></tr>
+                <tr><th>Холбогдсон</th><th>Нэр</th><th>Утас</th><th>Шагнал</th><th>Код</th><th>Эргүүлсэн</th><th>Тэмдэглэл</th></tr>
               </thead>
               <tbody>
-                {shownSubs.map((s) => (
-                  <tr key={s.email}>
-                    <td>{s.email}</td>
-                    <td>{s.name || <span className="muted">—</span>}</td>
-                    <td className="nowrap">{s.phone || <span className="muted">—</span>}</td>
-                    <td className="nowrap">{formatDateTime(s.firstSeen)}</td>
-                    <td>{s.spins}</td>
-                    <td><span className={`pill ${s.lastCode ? 'win' : 'lose'}`}>{s.lastLabel}</span></td>
-                    <td>{s.lastCode ? <code>{s.lastCode}</code> : <span className="muted">—</span>}</td>
-                  </tr>
-                ))}
+                {shownPeople.map((p) => {
+                  const c = contacts.get(p.phone);
+                  return (
+                    <tr key={p.phone} className={c?.contacted ? 'is-done' : ''}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          className="lw-call-check"
+                          checked={!!c?.contacted}
+                          onChange={(e) => updateContact(p.phone, { contacted: e.target.checked })}
+                          aria-label={`${formatPhone(p.phone)} руу холбогдсон`}
+                        />
+                      </td>
+                      <td>{p.name || <span className="muted">—</span>}</td>
+                      <td className="nowrap"><a className="lw-tel" href={`tel:+976${p.phone}`}>{formatPhone(p.phone)}</a></td>
+                      <td><span className={`pill ${p.lastCode ? 'win' : 'lose'}`}>{p.lastLabel}</span></td>
+                      <td>{p.lastCode ? <code>{p.lastCode}</code> : <span className="muted">—</span>}</td>
+                      <td className="nowrap">{formatDateTime(p.lastSpin)}{p.spins > 1 && <span className="muted"> ({p.spins} удаа)</span>}</td>
+                      <td>
+                        <NoteInput value={c?.note ?? ''} onSave={(note) => updateContact(p.phone, { note })} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
             <table className="lw-seg-table">
               <thead>
-                <tr><th>Огноо</th><th>Имэйл</th><th>Үр дүн</th><th>Код</th><th>Дуусах хугацаа</th><th>Төлөв</th></tr>
+                <tr><th>Огноо</th><th>Нэр</th><th>Утас</th><th>Үр дүн</th><th>Код</th><th>Дуусах хугацаа</th><th>Төлөв</th></tr>
               </thead>
               <tbody>
                 {shownSpins.map((r) => (
                   <tr key={r.id}>
                     <td className="nowrap">{formatDateTime(r.at)}</td>
-                    <td>{r.email}</td>
+                    <td>{r.name || <span className="muted">—</span>}</td>
+                    <td className="nowrap"><a className="lw-tel" href={`tel:+976${r.phone}`}>{formatPhone(r.phone)}</a></td>
                     <td><span className={`pill ${r.code ? 'win' : 'lose'}`}>{r.label}</span></td>
                     <td>{r.code ? <code>{r.code}</code> : <span className="muted">—</span>}</td>
                     <td className="nowrap">{r.expiresAt ? formatDate(r.expiresAt) : '—'}</td>
@@ -123,5 +184,29 @@ export function SubscribersTab({ spins, onChanged }: { spins: SpinRecord[]; onCh
         </div>
       )}
     </div>
+  );
+}
+
+/** Saves when the field loses focus or Enter is pressed. */
+function NoteInput({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  return (
+    <input
+      className="lw-note"
+      value={text}
+      maxLength={1000}
+      placeholder="Тэмдэглэл нэмэх…"
+      aria-label="Тэмдэглэл"
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => text !== value && onSave(text.trim())}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          setText(value);
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
