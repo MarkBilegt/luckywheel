@@ -5,17 +5,23 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && vite build",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.server.json && tsc -p tsconfig.test.json",
+    "test": "node --test \"tests/*.test.ts\"",
+    "test:api": "npm run build && node scripts/api-test.mjs",
+    "test:api:node": "npm run build && node scripts/api-test.mjs --node",
+    "start:node": "node server/index.ts",
+    "deploy": "npm run build && wrangler d1 migrations apply luckywheel --remote && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply luckywheel --local",
     "db:migrate:remote": "wrangler d1 migrations apply luckywheel --remote",
-    "deploy": "npm run build && wrangler d1 migrations apply luckywheel --remote && wrangler deploy"
+    "db:backup": "wrangler d1 export luckywheel --remote --output backup.sql",
+    "vps:backup": "node server/backup.ts",
+    "vps:import": "node server/import.ts",
+    "vps:export": "node server/export.ts"
   },
   "dependencies": {
-    "canvas-confetti": "^1.9.3",
-    "hono": "^4.13.18",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "@hono/node-server": "^2.1.8",
+    "hono": "^4.13.18"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261113.1",
@@ -24,8 +30,15 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "canvas-confetti": "^1.9.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "typescript": "~5.8.3",
     "vite": "^7.0.0",
     "wrangler": "^4.161.0"
+  },
+  "description": "Азын хүрд — a Mongolian spin-to-win site with an admin call list, on Cloudflare Workers + D1.",
+  "engines": {
+    "node": ">=22.18"
   }
 }

@@ -24,6 +24,10 @@ export type AppEnv = {
     SESSION_SECRET: string;
     /** Minutes ahead of UTC for daily resets; defaults to Mongolia (480). */
     UTC_OFFSET_MINUTES?: string;
+    /** VPS only: "1" when behind a reverse proxy (Caddy/nginx) that sets X-Forwarded-For. */
+    TRUST_PROXY?: string;
+    /** VPS only: the visitor's direct connection address, filled in by server/index.ts. */
+    REMOTE_ADDR?: string;
   };
 };
 
@@ -33,7 +37,22 @@ const fail = (status: 400 | 401 | 403 | 404 | 429 | 500, message: string) =>
   new HTTPException(status, { message });
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.slice(0, max) : '');
-const clientIp = (c: Context<AppEnv>) => c.req.header('cf-connecting-ip') ?? 'local';
+/**
+ * The visitor's IP, used for rate limits.
+ *  - Cloudflare: cf-connecting-ip (set by Cloudflare, can't be faked).
+ *  - VPS behind a proxy (TRUST_PROXY=1): the last X-Forwarded-For entry, i.e. the address the proxy
+ *    itself saw. Earlier entries come from the visitor and can be faked, so they're ignored.
+ *  - VPS without a proxy: the direct connection address.
+ */
+function clientIp(c: Context<AppEnv>): string {
+  const cf = c.req.header('cf-connecting-ip');
+  if (cf) return cf;
+  if (c.env.TRUST_PROXY === '1') {
+    const forwarded = c.req.header('x-forwarded-for')?.split(',').map((s) => s.trim()).filter(Boolean);
+    if (forwarded?.length) return forwarded[forwarded.length - 1];
+  }
+  return c.env.REMOTE_ADDR || 'local';
+}
 const offsetMin = (c: Context<AppEnv>) => Number(c.env.UTC_OFFSET_MINUTES ?? MONGOLIA_UTC_OFFSET_MIN) || 0;
 
 /** Uniform random in [0, 1) from the secure generator. */

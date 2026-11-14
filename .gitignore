@@ -1,6 +1,16 @@
 node_modules
 dist
+*.tsbuildinfo
+
+# Local secrets and data — never commit
 .env
 .dev.vars
 .wrangler/
 data/
+
+# Editor / assistant settings
+.claude/
+.vscode/
+backup.sql
+backups/
+export.sql

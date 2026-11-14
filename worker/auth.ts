@@ -12,13 +12,20 @@ async function sign(secret: string, payload: string): Promise<string> {
   return btoa(String.fromCharCode(...sig)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** Constant-time string comparison (hash both so lengths always match). */
+/**
+ * Constant-time string comparison (hash both so lengths always match). Plain JS so it works the
+ * same on Cloudflare Workers and on Node (Cloudflare's crypto.subtle.timingSafeEqual is Workers-only).
+ */
 async function safeEqual(a: string, b: string): Promise<boolean> {
   const [ha, hb] = await Promise.all([
     crypto.subtle.digest('SHA-256', enc.encode(a)),
     crypto.subtle.digest('SHA-256', enc.encode(b)),
   ]);
-  return crypto.subtle.timingSafeEqual(ha, hb);
+  const x = new Uint8Array(ha);
+  const y = new Uint8Array(hb);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
 }
 
 export function checkPassword(c: Context<AppEnv>, password: string): Promise<boolean> {

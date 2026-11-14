@@ -1,0 +1,39 @@
+# VPS setup: the lucky wheel app + Caddy (automatic HTTPS from Let's Encrypt).
+#   1. Point your domain's DNS (A record) at the server.
+#   2. cp .env.example .env   and fill it in.
+#   3. docker compose up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      TRUST_PROXY: "1" # only Caddy can reach the app, so its X-Forwarded-For is trusted
+    volumes:
+      - appdata:/app/data # the database (phone numbers, codes, notes)
+      - backups:/app/backups
+    expose:
+      - "3000" # not published: only reachable through Caddy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # HTTPS certificates
+      - caddy_config:/config
+
+volumes:
+  appdata:
+  backups:
+  caddy_data:
+  caddy_config:
