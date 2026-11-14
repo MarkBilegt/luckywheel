@@ -121,3 +121,51 @@ export function formatDateTime(iso: string): string {
   return `${formatDate(iso)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+
+/** The spin's speed curve (CSS cubic-bezier): fast start, long slow finish. Shared by the animation and the tick sound. */
+export const SPIN_EASING: [number, number, number, number] = [0.12, 0.6, 0.08, 1];
+
+function bezier(p1: number, p2: number, s: number): number {
+  const u = 1 - s;
+  return 3 * u * u * s * p1 + 3 * u * s * s * p2 + s * s * s;
+}
+
+/**
+ * When (seconds after the spin starts) each slice divider passes the pointer, for a spin from
+ * `fromDeg` to `toDeg` using SPIN_EASING. Ticks closer than `minGap` are merged, so the fast start
+ * sounds like a ratchet instead of a buzz.
+ */
+export function tickTimes(
+  fromDeg: number,
+  toDeg: number,
+  sliceCount: number,
+  pointerDeg: number,
+  durationSec: number,
+  minGap = 0.028,
+): number[] {
+  const total = toDeg - fromDeg;
+  if (total <= 0 || sliceCount < 1) return [];
+  const [x1, y1, x2, y2] = SPIN_EASING;
+  const slice = 360 / sliceCount;
+
+  // A divider is under the pointer whenever (pointer - rotation) is a multiple of the slice angle.
+  const offset = (((pointerDeg - fromDeg) % slice) + slice) % slice;
+  let first = fromDeg + offset;
+  if (first <= fromDeg) first += slice;
+
+  const times: number[] = [];
+  for (let angle = first; angle <= toDeg + 1e-9; angle += slice) {
+    const progress = (angle - fromDeg) / total;
+    // y(s) rises steadily from 0 to 1, so binary-search the curve parameter for this progress.
+    let lo = 0;
+    let hi = 1;
+    for (let i = 0; i < 40; i++) {
+      const mid = (lo + hi) / 2;
+      if (bezier(y1, y2, mid) < progress) lo = mid;
+      else hi = mid;
+    }
+    const t = bezier(x1, x2, (lo + hi) / 2) * durationSec;
+    if (!times.length || t - times[times.length - 1] >= minGap) times.push(t);
+  }
+  return times;
+}

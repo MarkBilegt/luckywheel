@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { previewSpin, spin } from '../lib/api';
 import { toPublicConfig } from '../lib/rules';
+import { isMuted, setMuted } from '../lib/sound';
 import { usePublicWheel } from '../lib/useConfig';
 import type { Config } from '../types';
 import { BackgroundEffect, themeVars } from './effects';
@@ -48,8 +49,36 @@ export function WheelPage() {
   return (
     <div className="lw-page" style={themeVars(design)}>
       <BackgroundEffect effect={design.bgEffect} />
+      {settings.soundEnabled && <SoundToggle />}
       <SpinPanel config={config} onSpin={spin} />
     </div>
+  );
+}
+
+/** Speaker button in the corner; the choice is remembered on this device. */
+function SoundToggle() {
+  const [muted, setMutedState] = useState(isMuted);
+  return (
+    <button
+      type="button"
+      className="lw-sound-toggle"
+      aria-pressed={muted}
+      aria-label={muted ? 'Дуу нээх' : 'Дуу хаах'}
+      title={muted ? 'Дуу нээх' : 'Дуу хаах'}
+      onClick={() => {
+        setMuted(!muted);
+        setMutedState(!muted);
+      }}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor" />
+        {muted ? (
+          <path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+        ) : (
+          <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+        )}
+      </svg>
+    </button>
   );
 }
 

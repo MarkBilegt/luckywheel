@@ -43,6 +43,12 @@ export interface Settings {
   resetTime: string;
   spinDurationSec: number;
 
+  // --- sound ---
+  /** Tick while spinning + fanfare on a win. Visitors can still mute it themselves. */
+  soundEnabled: boolean;
+  /** 0–100 */
+  soundVolume: number;
+
   // --- form ---
   /** The phone number is always required; the name can be required, optional or hidden. */
   nameField: FieldMode;

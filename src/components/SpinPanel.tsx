@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { validateInput } from '../lib/api';
-import { describePrize, fillTemplate, formatDate, pointerAngle, targetRotation } from '../lib/wheel';
+import { describePrize, fillTemplate, formatDate, pointerAngle, targetRotation, tickTimes } from '../lib/wheel';
 import type { PublicConfig, SpinInput, SpinRecord, SpinResult } from '../types';
+import { playWin, scheduleTicks, unlockAudio } from '../lib/sound';
 import { CustomCss, playWinEffect, prefersReducedMotion, useGoogleFont } from './effects';
 import { Wheel } from './Wheel';
 
-type Phase = 'form' | 'spinning' | 'result';
+/**
+ * form -> spinning (wheel flies to the centre of the screen and grows) -> landed (winner glows, badge pops)
+ * -> result (wheel glides back, result card appears).
+ */
+type Phase = 'form' | 'spinning' | 'landed' | 'result';
+
+/** How long each stage lasts (ms). */
+const ZOOM_MS = 800; // fly in / fly back (matches the CSS transition)
+const SPIN_DELAY_MS = 350; // let the wheel start flying before it starts turning
+const HOLD_WIN_MS = 1900; // admire the winning slice up close
+const HOLD_LOSE_MS = 1300;
 
 interface SpinPanelProps {
   config: PublicConfig;
@@ -28,10 +39,28 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rotation, setRotation] = useState(0);
+  const rotationRef = useRef(0);
+  const cancelTicks = useRef<() => void>(() => {});
   const [result, setResult] = useState<SpinRecord | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [winnerIndex, setWinnerIndex] = useState<number | null>(null);
+  /** Transform that brings the wheel to the middle of the screen, or null when it sits in its normal place. */
+  const [zoom, setZoom] = useState<{ transform: string; origin: string } | null>(null);
+  /** True from the start of the fly-in until the fly-back has finished (lifts the wheel above everything). */
+  const [lifted, setLifted] = useState(false);
   const firstFieldRef = useRef<HTMLInputElement>(null);
+  const wheelBoxRef = useRef<HTMLDivElement>(null);
+  const landingIndex = useRef(0);
+  const timers = useRef<number[]>([]);
+  const later = (fn: () => void, ms: number) => timers.current.push(window.setTimeout(fn, ms));
+  useEffect(
+    () => () => {
+      timers.current.forEach(clearTimeout);
+      cancelTicks.current();
+    },
+    [],
+  );
 
   // Freeze segments while spinning so an admin edit in another tab can't shift the landing slice.
   const [frozen, setFrozen] = useState(segments);
@@ -39,12 +68,91 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
 
   const half = design.wheelStyle === 'half';
   const pointer = half ? 'right' : design.pointerPosition;
-  const duration = prefersReducedMotion() ? 1.2 : settings.spinDurationSec;
+  const reduced = prefersReducedMotion();
+  const duration = reduced ? 1.2 : settings.spinDurationSec;
+  const wheelBusy = phase === 'spinning' || phase === 'landed';
+
+  // No scrolling while the wheel is up close (its position is worked out for the current scroll).
+  useEffect(() => {
+    if (!lifted) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [lifted]);
+
+  /**
+   * Waits until the browser has really started the spin animation (it begins a frame or two after
+   * we set the new rotation), then schedules every tick relative to that start time.
+   */
+  function syncTicksToSpin(times: number[], attempt = 0) {
+    const rotor = wheelBoxRef.current?.querySelector<HTMLElement>('.lw-wheel-rotor');
+    const anim = rotor
+      ?.getAnimations()
+      .find((a) => (a as CSSTransition).transitionProperty === 'transform');
+    const start = anim?.startTime;
+    if (start == null) {
+      // Not started yet: check again next frame (give up after ~1s and use "now").
+      if (attempt < 60) requestAnimationFrame(() => syncTicksToSpin(times, attempt + 1));
+      else scheduleAll(times, performance.now());
+      return;
+    }
+    scheduleAll(times, typeof start === 'number' ? start : performance.now());
+  }
+
+  /** Sound on the audio clock + a little pointer kick on screen, both at startMs + t. */
+  function scheduleAll(times: number[], startMs: number) {
+    cancelTicks.current();
+    const stopSound = settings.soundEnabled ? scheduleTicks(times, startMs) : () => {};
+
+    const flap = wheelBoxRef.current?.querySelector<SVGElement>('.lw-pointer svg');
+    const kickTimers: number[] = [];
+    if (flap && !reduced) {
+      times.forEach((t, i) => {
+        const gapMs = ((times[i + 1] ?? t + 0.3) - t) * 1000;
+        const delay = startMs + t * 1000 - performance.now();
+        if (delay < 0) return;
+        kickTimers.push(
+          window.setTimeout(() => {
+            flap.animate(
+              [{ transform: 'rotate(0deg)' }, { transform: 'rotate(-18deg)', offset: 0.25 }, { transform: 'rotate(0deg)' }],
+              { duration: Math.max(60, Math.min(220, gapMs * 0.85)), easing: 'ease-out' },
+            );
+          }, delay),
+        );
+      });
+    }
+    cancelTicks.current = () => {
+      stopSound();
+      kickTimers.forEach(clearTimeout);
+    };
+  }
+
+  /** Works out the move + scale that puts the wheel's centre in the middle of the screen, big. */
+  function flyIn() {
+    if (reduced) return;
+    const box = wheelBoxRef.current;
+    const wheel = box?.querySelector<HTMLElement>('.lw-wheel');
+    if (!box || !wheel) return;
+    const b = box.getBoundingClientRect();
+    const w = wheel.getBoundingClientRect();
+    const cx = w.left + w.width / 2;
+    const cy = w.top + w.height / 2;
+    // Leave room for the pointer, which sticks out past the rim.
+    const target = Math.min(window.innerWidth * 0.88, window.innerHeight * 0.76);
+    const scale = Math.max(1.05, Math.min(2.4, target / w.width));
+    setLifted(true);
+    setZoom({
+      origin: `${cx - b.left}px ${cy - b.top}px`,
+      transform: `translate(${window.innerWidth / 2 - cx}px, ${window.innerHeight / 2 - cy}px) scale(${scale})`,
+    });
+  }
 
   useEffect(() => {
     if (!onClose) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && phase !== 'spinning') onClose();
+      if (e.key === 'Escape' && phase !== 'spinning' && phase !== 'landed') onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -62,6 +170,8 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
     }
     setError(null);
     setBusy(true);
+    // Must happen inside the click itself, or browsers block the sound.
+    if (settings.soundEnabled) unlockAudio(settings.soundVolume / 100);
 
     try {
       // The server returns the wheel it picked from, so we always land on the right slice
@@ -69,11 +179,27 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
       const { segments: used, segmentIndex, record } = await onSpin(input, agreed);
       setFrozen(used);
       setResult(record);
+      setWinnerIndex(null);
+      landingIndex.current = segmentIndex;
       setPhase('spinning');
+      flyIn();
       const turns = Math.max(3, Math.round(duration * 1.2));
-      // Next frame so the transition is applied before the rotation changes.
+      // Start turning once the spin transition is applied and the wheel is on its way to the centre.
       requestAnimationFrame(() =>
-        setRotation((r) => targetRotation(r, segmentIndex, used.length, turns, pointerAngle(pointer))),
+        later(
+          () => {
+            const from = rotationRef.current;
+            const to = targetRotation(from, segmentIndex, used.length, turns, pointerAngle(pointer));
+            rotationRef.current = to;
+            setRotation(to);
+            // A tick (sound + pointer kick) each time a slice divider passes the pointer. The times
+            // come from the same speed curve as the animation and are anchored to the moment the
+            // browser actually started it, so they line up with what's on screen.
+            const times = tickTimes(from, to, used.length, pointerAngle(pointer), duration);
+            syncTicksToSpin(times);
+          },
+          reduced ? 0 : SPIN_DELAY_MS,
+        ),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Алдаа гарлаа. Дахин оролдоно уу.');
@@ -84,13 +210,32 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
 
   function handleSpinEnd() {
     if (phase !== 'spinning') return;
-    setPhase('result');
-    if (result?.code) playWinEffect(design.winEffect);
+    // Landed: light up the winning slice while the wheel is still big.
+    setPhase('landed');
+    setWinnerIndex(landingIndex.current);
+    if (result?.code) {
+      playWinEffect(design.winEffect);
+      if (settings.soundEnabled) playWin();
+    }
+
+    const hold = reduced ? 400 : result?.code ? HOLD_WIN_MS : HOLD_LOSE_MS;
+    later(() => {
+      setZoom(null); // glide back to its place
+      // Show the result once the wheel is home, so the layout doesn't shift under it mid-flight.
+      later(
+        () => {
+          setLifted(false);
+          setPhase('result');
+        },
+        reduced ? 0 : ZOOM_MS - 150,
+      );
+    }, hold);
   }
 
   function reset() {
     setPhase('form');
     setResult(null);
+    setWinnerIndex(null);
     setAgreed(false);
     setName('');
     setPhone('');
@@ -117,7 +262,7 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
 
   return (
     <div
-      className={`lw-panel ${onClose ? 'lw-panel--modal' : 'lw-panel--page'} ${half ? 'is-half' : ''}`}
+      className={`lw-panel ${onClose ? 'lw-panel--modal' : 'lw-panel--page'} ${half ? 'is-half' : ''} ${lifted ? 'is-lifted' : ''}`}
       role={onClose ? 'dialog' : 'region'}
       aria-modal={onClose ? true : undefined}
       aria-labelledby="lw-title"
@@ -126,12 +271,21 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
       {preview && <span className="lw-preview-badge">Туршилт — эргүүлэлт хадгалагдахгүй</span>}
 
       {onClose && (
-        <button type="button" className="lw-close" onClick={onClose} disabled={phase === 'spinning'} aria-label="Хаах">
+        <button type="button" className="lw-close" onClick={onClose} disabled={wheelBusy} aria-label="Хаах">
           ×
         </button>
       )}
 
-      <div className="lw-panel-wheel">
+      {/* Dims the page and shows slow light rays while the wheel is up close. */}
+      <div className={`lw-stage ${zoom ? 'is-on' : ''}`} aria-hidden="true">
+        <div className="lw-stage-rays" />
+      </div>
+
+      <div
+        ref={wheelBoxRef}
+        className={`lw-panel-wheel ${lifted ? 'is-lifted' : ''} ${zoom ? 'is-zoomed' : ''}`}
+        style={zoom ? { transform: zoom.transform, transformOrigin: zoom.origin } : undefined}
+      >
         <Wheel
           segments={wheelSegments}
           rotation={rotation}
@@ -140,6 +294,13 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
           onSpinEnd={handleSpinEnd}
           look={design}
           pointer={pointer}
+          winnerIndex={winnerIndex}
+          badge={
+            // Only while it's up close (gone as soon as it starts flying back).
+            phase === 'landed' && result && (zoom || reduced) ? (
+              <span className={`lw-landed-badge ${result.code ? 'is-win' : 'is-lose'}`}>{result.label}</span>
+            ) : null
+          }
         />
       </div>
 
@@ -198,7 +359,7 @@ export function SpinPanel({ config, onSpin, preview, onClose }: SpinPanelProps) 
               )}
               {error && <p className="lw-error" role="alert">{error}</p>}
               <button type="submit" className="lw-spin-btn" disabled={phase !== 'form' || busy}>
-                {phase === 'spinning' ? 'Эргэж байна…' : busy ? 'Түр хүлээнэ үү…' : settings.buttonText}
+                {wheelBusy ? 'Эргэж байна…' : busy ? 'Түр хүлээнэ үү…' : settings.buttonText}
               </button>
             </form>
           </>

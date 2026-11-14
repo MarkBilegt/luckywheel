@@ -21,6 +21,8 @@ export const DEFAULT_CONFIG: Config = {
     resetSpinsDaily: false,
     resetTime: '00:00',
     spinDurationSec: 6,
+    soundEnabled: true,
+    soundVolume: 70,
     nameField: 'required',
     gdprEnabled: true,
     gdprMessage: 'Би {terms} танилцаж, урамшууллын талаар над руу утсаар холбогдохыг зөвшөөрч байна.',

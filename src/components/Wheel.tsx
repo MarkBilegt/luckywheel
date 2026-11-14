@@ -1,4 +1,5 @@
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
+import { SPIN_EASING } from '../lib/wheel';
 import type { Design, PointerPosition, PublicSegment } from '../types';
 
 export type WheelLook = Pick<
@@ -15,6 +16,10 @@ interface WheelProps {
   onSpinEnd?: () => void;
   look: WheelLook;
   pointer: PointerPosition;
+  /** After landing: dims the other slices and outlines this one. */
+  winnerIndex?: number | null;
+  /** Shown over the wheel (e.g. the prize name once it lands). */
+  badge?: ReactNode;
 }
 
 const R = 180; // wheel radius in SVG units (viewBox is 400x400 centred on 0,0)
@@ -132,22 +137,38 @@ const WheelFace = memo(function WheelFace({ segments, look }: { segments: Public
   );
 });
 
-export function Wheel({ segments, rotation, durationSec, spinning, onSpinEnd, look, pointer }: WheelProps) {
+/** Darkens every slice except the winner and draws a glowing outline around it. Turns with the wheel. */
+function WinnerOverlay({ count, index }: { count: number; index: number }) {
+  const slice = 360 / count;
+  const start = -90 + index * slice;
   return (
-    <div className={`lw-wheel ${spinning ? 'is-spinning' : ''}`}>
+    <svg viewBox="-200 -200 400 400" className="lw-winner-overlay" aria-hidden="true">
+      {Array.from({ length: count }, (_, i) =>
+        i === index ? null : <path key={i} d={slicePath(-90 + i * slice, -90 + (i + 1) * slice)} className="lw-dim-slice" />,
+      )}
+      <path d={slicePath(start, start + slice)} className="lw-win-slice" />
+    </svg>
+  );
+}
+
+export function Wheel({ segments, rotation, durationSec, spinning, onSpinEnd, look, pointer, winnerIndex, badge }: WheelProps) {
+  const landed = winnerIndex != null;
+  return (
+    <div className={`lw-wheel ${spinning ? 'is-spinning' : ''} ${landed ? 'is-landed' : ''}`}>
       {/* Clip keeps the rotated square's corners from creating scroll overflow. */}
       <div className="lw-wheel-clip">
         <div
           className="lw-wheel-rotor"
           style={{
             transform: `rotate(${rotation}deg)`,
-            transition: spinning ? `transform ${durationSec}s cubic-bezier(0.12, 0.6, 0.08, 1)` : 'none',
+            transition: spinning ? `transform ${durationSec}s cubic-bezier(${SPIN_EASING.join(', ')})` : 'none',
           }}
           onTransitionEnd={(e) => {
-            if (e.propertyName === 'transform') onSpinEnd?.();
+            if (e.target === e.currentTarget && e.propertyName === 'transform') onSpinEnd?.();
           }}
         >
           <WheelFace segments={segments} look={look} />
+          {landed && <WinnerOverlay count={segments.length} index={winnerIndex} />}
         </div>
       </div>
       <div className={`lw-pointer lw-pointer--${pointer}`} aria-hidden="true">
@@ -163,6 +184,7 @@ export function Wheel({ segments, rotation, durationSec, spinning, onSpinEnd, lo
           </svg>
         )}
       </div>
+      {badge && <div className="lw-badge-anchor">{badge}</div>}
     </div>
   );
 }

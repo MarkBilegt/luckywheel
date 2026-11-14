@@ -140,11 +140,76 @@ code, .mono { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; }
 .lw-pointer--right { right: -4%; top: 50%; transform: translateY(-50%) rotate(90deg); }
 .lw-pointer--center { top: 50%; left: 50%; width: 12%; transform: translate(-50%, -77.5%); }
 .lw-pointer--center svg { transform-origin: 50% 77.5%; }
-.lw-wheel.is-spinning .lw-pointer svg { animation: lw-tick 0.12s ease-in-out infinite alternate; }
-@keyframes lw-tick { from { transform: rotate(-6deg); } to { transform: rotate(6deg); } }
 .lw-light-a { animation: lw-blink 1s steps(1) infinite; }
 .lw-light-b { animation: lw-blink 1s steps(1) infinite 0.5s; }
 @keyframes lw-blink { 50% { opacity: 0.35; } }
+
+/* ---------- the spin show: fly to the centre, land, fly back ---------- */
+/* The wheel box glides to the middle of the screen and grows (transform is set inline from JS). */
+.lw-panel-wheel { transition: transform 0.8s cubic-bezier(0.22, 0.9, 0.28, 1.06); }
+.lw-panel-wheel.is-lifted { z-index: 50; }
+.lw-panel.is-lifted { overflow: visible !important; } /* half wheel / admin preview would otherwise clip it */
+.lw-wheel-clip { transition: box-shadow 0.8s ease; }
+.lw-panel-wheel.is-zoomed .lw-wheel-clip {
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 90px color-mix(in srgb, var(--lw-accent, #f5c542) 40%, transparent);
+}
+
+/* Dimmed stage with slowly turning light rays behind the wheel. */
+.lw-stage {
+  position: fixed; inset: 0; z-index: 40; overflow: hidden; pointer-events: none;
+  opacity: 0; visibility: hidden; transition: opacity 0.6s ease, visibility 0s linear 0.6s;
+  background: radial-gradient(circle at 50% 50%, rgba(10, 10, 22, 0.4), rgba(4, 4, 12, 0.9) 70%);
+}
+.lw-stage.is-on { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 0.5s ease; }
+.lw-stage-rays {
+  position: absolute; left: 50%; top: 50%; width: 180vmax; height: 180vmax; margin: -90vmax 0 0 -90vmax;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--lw-accent, #f5c542) 22%, transparent) 0deg 5deg, transparent 5deg 15deg);
+  -webkit-mask-image: radial-gradient(circle, #000 0%, #000 10%, transparent 42%);
+  mask-image: radial-gradient(circle, #000 0%, #000 10%, transparent 42%);
+  animation: lw-rays 40s linear infinite;
+}
+@keyframes lw-rays { to { transform: rotate(360deg); } }
+
+/* Rim lights race while spinning. */
+.lw-wheel.is-spinning .lw-light-a { animation-duration: 0.3s; }
+.lw-wheel.is-spinning .lw-light-b { animation-duration: 0.3s; animation-delay: 0.15s; }
+
+/* Landed: other slices darken, the winner glows, the pointer gives a little hop. */
+.lw-wheel-rotor { position: relative; }
+.lw-winner-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.lw-dim-slice { fill: rgba(0, 0, 0, 0.55); animation: lw-fade-in 0.45s ease both; }
+.lw-win-slice {
+  fill: rgba(255, 255, 255, 0.14); stroke: #fff; stroke-width: 5; stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px var(--lw-accent, #f5c542)) drop-shadow(0 0 14px var(--lw-accent, #f5c542));
+  animation: lw-fade-in 0.3s ease both, lw-win-pulse 0.9s ease-in-out 0.3s infinite alternate;
+}
+@keyframes lw-fade-in { from { opacity: 0; } }
+@keyframes lw-win-pulse { to { fill: rgba(255, 255, 255, 0.28); stroke-width: 7; } }
+.lw-wheel.is-landed .lw-pointer svg { animation: lw-hop 0.42s ease-out 2; }
+@keyframes lw-hop { 50% { transform: scale(1.22); } }
+
+/* Visitor's mute button (top-right of the page). */
+.lw-sound-toggle {
+  position: fixed; top: 14px; right: 14px; z-index: 30; width: 44px; height: 44px; padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 50%; background: rgba(0, 0, 0, 0.35);
+  color: var(--lw-text, #fff); backdrop-filter: blur(4px); transition: background 0.15s, transform 0.15s;
+}
+.lw-sound-toggle:hover { background: rgba(0, 0, 0, 0.55); transform: scale(1.06); }
+.lw-sound-toggle[aria-pressed='true'] { opacity: 0.7; }
+.lw-sound-toggle svg { width: 100%; height: 100%; display: block; }
+.lw-sound-test { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Prize name badge that pops up over the wheel. */
+.lw-badge-anchor { position: absolute; left: 50%; top: 64%; transform: translateX(-50%); z-index: 3; pointer-events: none; }
+.lw-landed-badge {
+  display: inline-block; white-space: nowrap; padding: 8px 18px; border-radius: 999px;
+  font-size: 18px; font-weight: 900; letter-spacing: 0.02em; text-transform: uppercase;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: lw-badge-pop 0.55s cubic-bezier(0.2, 1.6, 0.4, 1) 0.15s both;
+}
+.lw-landed-badge.is-win { background: var(--lw-accent, #f5c542); color: #1b1b1f; }
+.lw-landed-badge.is-lose { background: rgba(255, 255, 255, 0.92); color: #2b2d42; }
+@keyframes lw-badge-pop { from { opacity: 0; transform: scale(0.3) translateY(12px); } }
 
 /* ---------- background effects ---------- */
 .lw-bg-effect { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
@@ -169,7 +234,9 @@ code, .mono { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lw-light-a, .lw-light-b, .lw-wheel.is-spinning .lw-pointer svg { animation: none; }
+  .lw-light-a, .lw-light-b, .lw-wheel.is-spinning .lw-pointer svg,
+  .lw-stage-rays, .lw-win-slice, .lw-wheel.is-landed .lw-pointer svg { animation: none; }
+  .lw-panel-wheel { transition: none; }
 }
 
 /* ---------- admin ---------- */

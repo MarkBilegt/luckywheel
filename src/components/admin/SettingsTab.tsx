@@ -1,3 +1,5 @@
+import { playWin, scheduleTicks, unlockAudio } from '../../lib/sound';
+import { tickTimes } from '../../lib/wheel';
 import type { FieldMode, Settings } from '../../types';
 import { CheckField, Field, NumberField, SelectField, TextField } from './fields';
 
@@ -22,6 +24,34 @@ export function SettingsTab({ s, set }: { s: Settings; set: Set }) {
         <input type="time" value={s.resetTime} disabled={!s.resetSpinsDaily} onChange={(e) => set('resetTime', e.target.value || '00:00')} className="narrow-time" />
       </Field>
       <NumberField label="Эргэх хугацаа (секунд)" min={2} max={15} value={s.spinDurationSec} onChange={(v) => set('spinDurationSec', v)} />
+
+      <h4>Дуу</h4>
+      <CheckField label="Дуу тоглуулах" hint="Эргэх үеийн тикэх дуу, хожих үеийн баярын ая. Зочид өөрсдөө хааж болно." checked={s.soundEnabled} onChange={(v) => set('soundEnabled', v)} />
+      <NumberField label="Дууны хэмжээ (%)" min={0} max={100} step={5} value={s.soundVolume} onChange={(v) => set('soundVolume', v)} />
+      <div className="lw-sound-test">
+        <span className="lw-field-label">Сонсож үзэх:</span>
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={() => {
+            unlockAudio(s.soundVolume / 100);
+            // A real-length spin's worth of ticks (8 slices, ~7 turns).
+            scheduleTicks(tickTimes(0, 360 * 7 + 100, 8, 0, s.spinDurationSec));
+          }}
+        >
+          Эргэх дуу
+        </button>
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={() => {
+            unlockAudio(s.soundVolume / 100);
+            playWin();
+          }}
+        >
+          Хожих дуу
+        </button>
+      </div>
 
       <h4>Маягтын талбарууд</h4>
       <SelectField label="Нэр" value={s.nameField} options={FIELD_MODES} onChange={(v) => set('nameField', v)} />
